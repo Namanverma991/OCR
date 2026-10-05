@@ -12,10 +12,10 @@ from app.core.config import settings
 
 def main():
     print("=" * 60)
-    print("  🚀 PADDLEOCR STUDIO & REST API SERVER")
-    print(f"  📡 Running on: http://localhost:{settings.PORT}")
-    print(f"  📖 API Docs:   http://localhost:{settings.PORT}/docs")
-    print(f"  🎨 Web Studio: http://localhost:{settings.PORT}/")
+    print("  [>] PADDLEOCR STUDIO & REST API SERVER")
+    print(f"  [*] Running on: http://localhost:{settings.PORT}")
+    print(f"  [*] API Docs:   http://localhost:{settings.PORT}/docs")
+    print(f"  [*] Web Studio: http://localhost:{settings.PORT}/")
     print("=" * 60)
     
     uvicorn.run(
