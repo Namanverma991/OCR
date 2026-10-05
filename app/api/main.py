@@ -38,6 +38,10 @@ app.add_middleware(
 # Register API Endpoints
 app.include_router(ocr_router)
 
+@app.get("/health", include_in_schema=False)
+async def root_health_check():
+    return {"status": "healthy", "service": settings.APP_NAME, "version": settings.APP_VERSION}
+
 # Mount Web Dashboard
 web_dir = Path(__file__).resolve().parent.parent / "web"
 if web_dir.exists():
