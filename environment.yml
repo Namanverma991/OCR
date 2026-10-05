@@ -1,0 +1,29 @@
+name: ocr-engine
+channels:
+  - paddle
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.11
+  - pip
+  - numpy>=1.24.0,<2.0.0
+  - pillow>=10.2.0
+  - opencv>=4.8.0
+  - shapely>=2.0.0
+  - pyclipper>=1.3.0
+  - scipy>=1.11.0
+  - pandas>=2.2.0
+  - openpyxl>=3.1.2
+  - pip:
+      - paddlepaddle==2.5.2
+      - paddleocr>=2.7.3
+      - fastapi>=0.110.0
+      - uvicorn[standard]>=0.28.0
+      - python-multipart>=0.0.9
+      - pydantic>=2.6.0
+      - reportlab>=4.1.0
+      - pypdfium2>=4.28.0
+      - pdfplumber>=0.10.3
+      - pypdf>=4.1.0
+      - rich>=13.7.0
+      - pyyaml>=6.0.1

@@ -1,0 +1,34 @@
+# Core OCR Dependencies
+paddlepaddle>=2.5.2; sys_platform != "win32" or python_version < "3.13"
+paddleocr>=2.7.3
+
+# Web API & Server
+fastapi>=0.110.0
+uvicorn[standard]>=0.28.0
+pydantic>=2.6.0
+python-multipart>=0.0.9
+
+# Computer Vision & Image Processing
+opencv-python-headless>=4.8.0
+Pillow>=10.2.0
+numpy>=1.24.0,<2.0.0
+shapely>=2.0.0
+pyclipper>=1.3.0
+scipy>=1.11.0
+
+# Document & PDF Processing
+pypdfium2>=4.28.0
+pdfplumber>=0.10.3
+pypdf>=4.1.0
+
+# Document Generation & Export
+reportlab>=4.1.0
+openpyxl>=3.1.2
+pandas>=2.2.0
+
+# Utilities & CLI
+tqdm>=4.66.0
+colorama>=0.4.6
+requests>=2.31.0
+pyyaml>=6.0.1
+rich>=13.7.0

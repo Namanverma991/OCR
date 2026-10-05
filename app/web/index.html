@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PaddleOCR Studio • Next-Gen Neural Document & OCR Intelligence</title>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body class="dark-theme">
+    <!-- Background Animated Gradient Orbs -->
+    <div class="bg-orb orb-1"></div>
+    <div class="bg-orb orb-2"></div>
+    <div class="bg-orb orb-3"></div>
+
+    <div class="app-container">
+        <!-- Top Navbar -->
+        <header class="glass-header">
+            <div class="header-left">
+                <div class="logo-badge">
+                    <i class="fa-solid fa-brain-circuit"></i>
+                </div>
+                <div>
+                    <h1 class="logo-title">PaddleOCR <span class="gradient-text">Studio</span></h1>
+                    <p class="logo-subtitle">PP-OCRv4 Deep Learning Engine • Differentiable Binarization & SVTR</p>
+                </div>
+            </div>
+            
+            <div class="header-right">
+                <div class="status-chip" id="system-status">
+                    <span class="pulse-dot"></span>
+                    <span id="status-text">Engine Online (CPU/GPU Ready)</span>
+                </div>
+                <a href="/docs" target="_blank" class="glass-btn small-btn">
+                    <i class="fa-solid fa-code"></i> API Docs
+                </a>
+                <a href="https://github.com/PaddlePaddle/PaddleOCR" target="_blank" class="glass-btn small-btn github-btn">
+                    <i class="fa-brands fa-github"></i> GitHub
+                </a>
+            </div>
+        </header>
+
+        <!-- Main Workspace Grid -->
+        <main class="workspace-grid">
+            <!-- Left Panel: Controls & Input -->
+            <section class="card glass-card left-panel">
+                <div class="panel-header">
+                    <h2><i class="fa-solid fa-sliders"></i> Ingestion & Settings</h2>
+                </div>
+
+                <!-- Dropzone -->
+                <div class="upload-zone" id="drop-zone">
+                    <input type="file" id="file-input" accept="image/*,application/pdf" hidden>
+                    <div class="upload-content">
+                        <div class="upload-icon-circle">
+                            <i class="fa-solid fa-cloud-arrow-up"></i>
+                        </div>
+                        <h3>Drag & drop document or image</h3>
+                        <p>Supports PNG, JPG, WEBP, TIFF, BMP (Up to 25MB)</p>
+                        <button type="button" class="glass-btn primary-btn" id="browse-btn">
+                            <i class="fa-solid fa-folder-open"></i> Browse Files
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Configuration Options -->
+                <div class="config-section">
+                    <div class="config-group">
+                        <label for="lang-select"><i class="fa-solid fa-language"></i> Recognition Language</label>
+                        <select id="lang-select" class="custom-select">
+                            <option value="en" selected>English (Latin)</option>
+                            <option value="ch">Chinese (Simplified & Traditional)</option>
+                            <option value="hi">Hindi (Devanagari)</option>
+                            <option value="fr">French</option>
+                            <option value="german">German</option>
+                            <option value="es">Spanish</option>
+                            <option value="japan">Japanese</option>
+                            <option value="korean">Korean</option>
+                            <option value="arabic">Arabic</option>
+                        </select>
+                    </div>
+
+                    <div class="toggles-grid">
+                        <label class="toggle-item">
+                            <input type="checkbox" id="deskew-toggle" checked>
+                            <span class="toggle-slider"></span>
+                            <span class="toggle-label">Auto-Deskew & Align</span>
+                        </label>
+                        <label class="toggle-item">
+                            <input type="checkbox" id="contrast-toggle" checked>
+                            <span class="toggle-slider"></span>
+                            <span class="toggle-label">CLAHE Contrast Boost</span>
+                        </label>
+                        <label class="toggle-item">
+                            <input type="checkbox" id="angle-cls-toggle" checked>
+                            <span class="toggle-slider"></span>
+                            <span class="toggle-label">Direction Classifier (180°)</span>
+                        </label>
+                    </div>
+
+                    <!-- Action Buttons -->
+                    <div class="action-buttons-row">
+                        <button class="glass-btn run-btn" id="process-btn" disabled>
+                            <i class="fa-solid fa-bolt"></i> Run OCR Extraction
+                        </button>
+                        <button class="glass-btn secondary-btn" id="sample-btn">
+                            <i class="fa-solid fa-file-invoice"></i> Load Sample Invoice
+                        </button>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Center Panel: Interactive Visualizer -->
+            <section class="card glass-card center-panel">
+                <div class="panel-header flex-between">
+                    <h2><i class="fa-solid fa-eye"></i> Visual Box Inspector</h2>
+                    <div class="canvas-tools" id="canvas-tools" style="display: none;">
+                        <button class="tool-btn" id="zoom-in-btn" title="Zoom In"><i class="fa-solid fa-magnifying-glass-plus"></i></button>
+                        <button class="tool-btn" id="zoom-out-btn" title="Zoom Out"><i class="fa-solid fa-magnifying-glass-minus"></i></button>
+                        <button class="tool-btn" id="reset-zoom-btn" title="Fit to Screen"><i class="fa-solid fa-arrows-rotate"></i></button>
+                        <label class="tool-checkbox">
+                            <input type="checkbox" id="show-boxes-chk" checked> Show Polygons
+                        </label>
+                    </div>
+                </div>
+
+                <div class="viewport-wrapper" id="viewport-wrapper">
+                    <div class="placeholder-state" id="canvas-placeholder">
+                        <i class="fa-solid fa-image-polaroid placeholder-icon"></i>
+                        <p>Upload a document to inspect detection bounding boxes and confidence heatmaps</p>
+                    </div>
+                    
+                    <div class="canvas-container" id="canvas-container" style="display: none;">
+                        <img id="source-image" alt="Source Document" />
+                        <canvas id="overlay-canvas"></canvas>
+                    </div>
+
+                    <!-- Hover Box Tooltip -->
+                    <div class="box-tooltip" id="box-tooltip">
+                        <div class="tooltip-header">
+                            <span class="tooltip-badge" id="tt-conf">99.4% Conf</span>
+                            <span class="tooltip-angle" id="tt-angle">0° Angle</span>
+                        </div>
+                        <div class="tooltip-body" id="tt-text">Text content</div>
+                    </div>
+                </div>
+
+                <!-- Metrics Bar -->
+                <div class="metrics-bar" id="metrics-bar">
+                    <div class="metric-item">
+                        <span class="metric-label">Inference Time</span>
+                        <span class="metric-val" id="metric-time">-- ms</span>
+                    </div>
+                    <div class="metric-item">
+                        <span class="metric-label">Detected Lines</span>
+                        <span class="metric-val" id="metric-lines">--</span>
+                    </div>
+                    <div class="metric-item">
+                        <span class="metric-label">Avg Confidence</span>
+                        <span class="metric-val" id="metric-conf">--%</span>
+                    </div>
+                    <div class="metric-item">
+                        <span class="metric-label">Algorithm</span>
+                        <span class="metric-val" id="metric-algo">PP-OCRv4 (DBNet + SVTR)</span>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Right Panel: Output Tabs & Structured Data -->
+            <section class="card glass-card right-panel">
+                <div class="tabs-header">
+                    <button class="tab-btn active" data-tab="tab-text"><i class="fa-solid fa-align-left"></i> Text</button>
+                    <button class="tab-btn" data-tab="tab-entities"><i class="fa-solid fa-id-card-clip"></i> Entities</button>
+                    <button class="tab-btn" data-tab="tab-table"><i class="fa-solid fa-table-cells"></i> Tables</button>
+                    <button class="tab-btn" data-tab="tab-json"><i class="fa-solid fa-code"></i> JSON</button>
+                </div>
+
+                <div class="tab-content-wrapper">
+                    <!-- Tab 1: Formatted Text -->
+                    <div class="tab-pane active" id="tab-text">
+                        <div class="pane-actions">
+                            <button class="glass-btn small-btn" id="copy-text-btn"><i class="fa-regular fa-copy"></i> Copy</button>
+                            <button class="glass-btn small-btn" id="download-txt-btn"><i class="fa-solid fa-download"></i> TXT</button>
+                        </div>
+                        <textarea id="output-text-area" class="code-editor" readonly placeholder="Extracted text will appear here in human reading order..."></textarea>
+                    </div>
+
+                    <!-- Tab 2: Structured Entities -->
+                    <div class="tab-pane" id="tab-entities">
+                        <div class="pane-actions">
+                            <button class="glass-btn small-btn" id="extract-entities-btn"><i class="fa-solid fa-wand-magic-sparkles"></i> Auto-Parse</button>
+                        </div>
+                        <div class="entities-container" id="entities-container">
+                            <p class="empty-state-text">Click "Auto-Parse" or run OCR to extract Invoices, Dates, Tax IDs, and Totals.</p>
+                        </div>
+                    </div>
+
+                    <!-- Tab 3: Tables -->
+                    <div class="tab-pane" id="tab-table">
+                        <div class="pane-actions">
+                            <button class="glass-btn small-btn" id="download-csv-btn"><i class="fa-solid fa-file-csv"></i> CSV</button>
+                            <button class="glass-btn small-btn" id="download-md-btn"><i class="fa-solid fa-file-lines"></i> Markdown</button>
+                        </div>
+                        <div class="table-render-area" id="table-render-area">
+                            <p class="empty-state-text">No tabular structures extracted yet.</p>
+                        </div>
+                    </div>
+
+                    <!-- Tab 4: JSON -->
+                    <div class="tab-pane" id="tab-json">
+                        <div class="pane-actions">
+                            <button class="glass-btn small-btn" id="copy-json-btn"><i class="fa-regular fa-copy"></i> Copy JSON</button>
+                            <button class="glass-btn small-btn" id="download-json-btn"><i class="fa-solid fa-download"></i> JSON</button>
+                        </div>
+                        <pre class="json-viewer" id="json-viewer-pre"><code>{}</code></pre>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <!-- Toast Notification -->
+    <div class="toast-container" id="toast-container"></div>
+
+    <script src="/static/js/app.js"></script>
+</body>
+</html>
