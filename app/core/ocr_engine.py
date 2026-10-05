@@ -142,56 +142,24 @@ class OCREngine:
             try:
                 from paddleocr import PaddleOCR
                 
-                model = None
-                # Stable mobile version on CPU
-                versions_to_try = [ocr_version]
-                if ocr_version != "PP-OCRv4":
-                    versions_to_try.extend(["PP-OCRv4", None])
-
-                for v in versions_to_try:
-                    try:
-                        # PaddleOCR 3.x configuration optimized for CPU without heavy OneDNN unwarpers
-                        kwargs: Dict[str, Any] = {
-                            "lang": lang,
-                            "device": device,
-                            "use_doc_unwarping": False,
-                            "use_doc_orientation_classify": False,
-                            "use_textline_orientation": False,
-                        }
-                        if v:
-                            kwargs["ocr_version"] = v
-                        
-                        try:
-                            model = PaddleOCR(**kwargs)
-                            logger.info(f"Initialized PaddleOCR for lang='{lang}', version='{v or 'default'}', device='{device}'")
-                            break
-                        except TypeError:
-                            # PaddleOCR 2.x interface
-                            legacy_kwargs = {
-                                "lang": lang,
-                                "use_gpu": (device.lower() == "gpu"),
-                                "use_angle_cls": False,
-                                "show_log": False,
-                            }
-                            if v:
-                                legacy_kwargs["ocr_version"] = v
-                            model = PaddleOCR(**legacy_kwargs)
-                            logger.info(f"Initialized PaddleOCR (legacy params) for lang='{lang}', version='{v or 'default'}'")
-                            break
-                    except Exception as ve:
-                        logger.warning(f"Version '{v}' init issue: {ve}. Trying next...")
-                        continue
-
-                if model is not None:
-                    self._instances[cache_key] = model
-                    return model
+                use_gpu_flag = (device.lower() == "gpu") or settings.USE_GPU
+                model = PaddleOCR(
+                    use_angle_cls=use_angle_cls,
+                    lang=lang,
+                    use_gpu=use_gpu_flag,
+                    show_log=False,
+                    ocr_version=ocr_version or "PP-OCRv4"
+                )
+                logger.info(f"Initialized PaddleOCR engine: lang='{lang}', version='{ocr_version}', gpu={use_gpu_flag}")
+                self._instances[cache_key] = model
+                return model
             except Exception as e:
-                logger.error(f"Failed to load PaddleOCR model: {e}.")
+                logger.error(f"Failed to load PaddleOCR model: {e}", exc_info=True)
                 return None
         return None
 
     def _parse_paddle_results(self, raw_results: Any) -> List[OCRResultItem]:
-        """Normalize results from PaddleOCR v2 or v3 pipelines into OCRResultItem list."""
+        """Normalize results from PaddleOCR pipelines into OCRResultItem list."""
         items: List[OCRResultItem] = []
         if not raw_results:
             return items
@@ -216,9 +184,11 @@ class OCREngine:
                     items.append(OCRResultItem(text=text, confidence=score, box=box, angle=angle))
             return items
 
-        # Case 2: PaddleOCR v2 list-of-lines structure [[[points], (text, score)], ...]
+        # Case 2: PaddleOCR v2 / PP-OCR standard list: [[[points], (text, score)], ...]
         if isinstance(raw_results, list):
-            lines = raw_results[0] if len(raw_results) == 1 and isinstance(raw_results[0], list) else raw_results
+            lines = raw_results[0] if (len(raw_results) == 1 and isinstance(raw_results[0], list)) else raw_results
+            if lines is None:
+                return items
             for line in lines:
                 if not line or not isinstance(line, (list, tuple)) or len(line) < 2:
                     continue
@@ -268,14 +238,14 @@ class OCREngine:
         items: List[OCRResultItem] = []
         if self.ocr_model is not None:
             try:
-                if hasattr(self.ocr_model, "predict"):
-                    raw_results = list(self.ocr_model.predict(processed_img))
-                else:
-                    raw_results = self.ocr_model.ocr(processed_img, cls=False)
+                raw_results = self.ocr_model.ocr(processed_img, cls=self.use_angle_cls)
                 items = self._parse_paddle_results(raw_results)
+                logger.info(f"OCR inference completed: {len(items)} text blocks detected.")
             except Exception as e:
-                logger.error(f"Inference error in PaddleOCR: {e}.")
+                logger.error(f"Inference error in PaddleOCR: {e}", exc_info=True)
                 items = []
+        else:
+            logger.error("PaddleOCR model is not initialized (ocr_model is None).")
 
         # 3. Compute elapsed time
         elapsed_ms = (time.time() - start_time) * 1000.0
