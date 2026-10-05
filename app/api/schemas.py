@@ -20,6 +20,24 @@ class OCRResultModel(BaseModel):
     angle: float = 0.0
 
 
+class PageOCRResultModel(BaseModel):
+    page_number: int
+    extraction_method: str
+    text: str
+    lines_count: int
+    confidence: float
+    results: List[Dict[str, Any]] = []
+
+
+class TableDataModel(BaseModel):
+    rows: int
+    cols: int
+    headers: List[str]
+    matrix: List[List[str]]
+    csv: str
+    markdown: str
+
+
 class OCRImageResponse(BaseModel):
     success: bool = True
     filename: str
@@ -30,13 +48,18 @@ class OCRImageResponse(BaseModel):
     meta: Dict[str, Any]
 
 
-class TableDataModel(BaseModel):
-    rows: int
-    cols: int
-    headers: List[str]
-    matrix: List[List[str]]
-    csv: str
-    markdown: str
+class OCRDocumentResponse(BaseModel):
+    success: bool = True
+    filename: str
+    file_type: str
+    total_pages: int
+    processing_time_ms: float
+    full_text: str
+    pages: List[PageOCRResultModel]
+    results: Optional[List[OCRResultModel]] = None
+    entities: Dict[str, Any] = {}
+    tables: List[TableDataModel] = []
+    meta: Dict[str, Any]
 
 
 class TableOCRResponse(BaseModel):
@@ -61,4 +84,5 @@ class HealthResponse(BaseModel):
     version: str
     paddle_installed: bool
     default_engine: str
+    device: str
     gpu_available: bool

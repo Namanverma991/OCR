@@ -1,12 +1,19 @@
 """
 Core OCR Engine Module
-Wraps PaddleOCR (PP-OCRv4 / PP-OCRv3) with unified batching, fallback logic,
+Wraps PaddleOCR (PP-OCRv6 Tiny / PP-OCRv4 Mobile CPU) with unified batching, fallback logic,
 confidence normalization, and multi-language routing.
 """
 
+import os
+# Configure CPU execution flags before paddle import to prevent OneDNN/PIR runtime attribute conflicts
+os.environ["FLAGS_enable_pir_api"] = "0"
+os.environ["FLAGS_use_mkldnn"] = "0"
+os.environ["FLAGS_enable_onednn"] = "0"
+os.environ["PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK"] = "True"
+
 import time
 import logging
-from typing import List, Dict, Any, Optional, Union, Tuple
+from typing import List, Dict, Any, Optional, Tuple
 import numpy as np
 import cv2
 
@@ -15,6 +22,17 @@ from app.core.preprocessor import ImagePreprocessor
 
 logger = logging.getLogger("ocr.engine")
 logging.basicConfig(level=logging.INFO)
+
+# Apply runtime flags to paddle if available
+try:
+    import paddle
+    paddle.set_flags({
+        "FLAGS_enable_pir_api": 0,
+        "FLAGS_use_mkldnn": 0,
+        "FLAGS_enable_onednn": 0
+    })
+except Exception:
+    pass
 
 
 class OCRResultItem:
@@ -27,22 +45,27 @@ class OCRResultItem:
         angle: float = 0.0,
         cls_confidence: float = 1.0,
     ):
-        self.text = text
+        self.text = str(text).strip()
         self.confidence = float(confidence)
-        self.box = [[float(p[0]), float(p[1])] for p in box]  # 4 points: [[x1,y1],[x2,y2],[x3,y3],[x4,y4]]
+        # 4 points: [[x1,y1],[x2,y2],[x3,y3],[x4,y4]]
+        self.box = [[float(p[0]), float(p[1])] for p in box] if box else [[0.0, 0.0]] * 4
         self.angle = float(angle)
         self.cls_confidence = float(cls_confidence)
         
         # Calculate center & approximate bounding rectangle
-        xs = [p[0] for p in self.box]
-        ys = [p[1] for p in self.box]
-        self.min_x = min(xs)
-        self.max_x = max(xs)
-        self.min_y = min(ys)
-        self.max_y = max(ys)
+        if self.box:
+            xs = [p[0] for p in self.box]
+            ys = [p[1] for p in self.box]
+            self.min_x = min(xs)
+            self.max_x = max(xs)
+            self.min_y = min(ys)
+            self.max_y = max(ys)
+        else:
+            self.min_x = self.max_x = self.min_y = self.max_y = 0.0
+            
         self.center = [(self.min_x + self.max_x) / 2.0, (self.min_y + self.max_y) / 2.0]
-        self.width = self.max_x - self.min_x
-        self.height = self.max_y - self.min_y
+        self.width = max(0.0, self.max_x - self.min_x)
+        self.height = max(0.0, self.max_y - self.min_y)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -58,18 +81,32 @@ class OCRResultItem:
 
 class OCREngine:
     """
-    Industrial PP-OCR Engine Manager.
+    PP-OCR Production Engine Manager.
+    Optimized for CPU inference with PaddleOCR PP-OCRv6 Tiny / PP-OCRv4 Mobile.
     Handles model caching, multi-language switching, and graceful inference execution.
     """
 
     _instances: Dict[str, Any] = {}
     _is_paddle_available: Optional[bool] = None
 
-    def __init__(self, lang: str = "en", use_gpu: bool = False, use_angle_cls: bool = True):
-        self.lang = lang
-        self.use_gpu = use_gpu
-        self.use_angle_cls = use_angle_cls
-        self.ocr_model = self._get_or_create_model(lang, use_gpu, use_angle_cls)
+    def __init__(
+        self,
+        lang: Optional[str] = None,
+        device: Optional[str] = None,
+        use_angle_cls: Optional[bool] = None,
+        ocr_version: Optional[str] = None
+    ):
+        self.lang = lang or settings.DEFAULT_LANG
+        self.device = device or settings.OCR_DEVICE
+        self.use_gpu = (self.device.lower() == "gpu") or settings.USE_GPU
+        self.use_angle_cls = settings.USE_ANGLE_CLS if use_angle_cls is None else use_angle_cls
+        self.ocr_version = ocr_version or settings.OCR_VERSION
+        self.ocr_model = self._get_or_create_model(
+            lang=self.lang,
+            device=self.device,
+            use_angle_cls=self.use_angle_cls,
+            ocr_version=self.ocr_version
+        )
 
     @classmethod
     def check_paddle_installed(cls) -> bool:
@@ -78,81 +115,130 @@ class OCREngine:
             return cls._is_paddle_available
         try:
             import paddleocr
-            import paddle
             cls._is_paddle_available = True
-            logger.info("PaddleOCR & PaddlePaddle verified successfully.")
+            logger.info("PaddleOCR verified successfully.")
         except ImportError as e:
             cls._is_paddle_available = False
-            logger.warning(f"PaddleOCR native packages not found: {e}. Fallback pipeline enabled.")
+            logger.warning(f"PaddleOCR native packages not found: {e}.")
         return cls._is_paddle_available
 
-    def _get_or_create_model(self, lang: str, use_gpu: bool, use_angle_cls: bool):
+    def _get_or_create_model(
+        self,
+        lang: str,
+        device: str,
+        use_angle_cls: bool,
+        ocr_version: str
+    ):
         """Retrieve cached model instance or initialize a new PaddleOCR pipeline."""
-        cache_key = f"{lang}_{use_gpu}_{use_angle_cls}"
+        cache_key = f"{lang}_{device}_{use_angle_cls}_{ocr_version}"
         if cache_key in self._instances:
             return self._instances[cache_key]
+
+        if not settings.OCR_ENABLED:
+            logger.info("OCR is disabled via configuration.")
+            return None
 
         if self.check_paddle_installed():
             try:
                 from paddleocr import PaddleOCR
-                model = PaddleOCR(
-                    use_angle_cls=use_angle_cls,
-                    lang=lang,
-                    use_gpu=use_gpu,
-                    show_log=False,
-                    det_db_thresh=settings.DET_DB_THRESH,
-                    det_db_box_thresh=settings.DET_DB_BOX_THRESH,
-                    det_db_unclip_ratio=settings.DET_DB_UNCLIP_RATIO,
-                    ocr_version=settings.OCR_VERSION
-                )
-                self._instances[cache_key] = model
-                logger.info(f"Initialized PaddleOCR for lang='{lang}' (GPU={use_gpu})")
-                return model
+                
+                model = None
+                # Stable mobile version on CPU
+                versions_to_try = [ocr_version]
+                if ocr_version != "PP-OCRv4":
+                    versions_to_try.extend(["PP-OCRv4", None])
+
+                for v in versions_to_try:
+                    try:
+                        # PaddleOCR 3.x configuration optimized for CPU without heavy OneDNN unwarpers
+                        kwargs: Dict[str, Any] = {
+                            "lang": lang,
+                            "device": device,
+                            "use_doc_unwarping": False,
+                            "use_doc_orientation_classify": False,
+                            "use_textline_orientation": False,
+                        }
+                        if v:
+                            kwargs["ocr_version"] = v
+                        
+                        try:
+                            model = PaddleOCR(**kwargs)
+                            logger.info(f"Initialized PaddleOCR for lang='{lang}', version='{v or 'default'}', device='{device}'")
+                            break
+                        except TypeError:
+                            # PaddleOCR 2.x interface
+                            legacy_kwargs = {
+                                "lang": lang,
+                                "use_gpu": (device.lower() == "gpu"),
+                                "use_angle_cls": False,
+                                "show_log": False,
+                            }
+                            if v:
+                                legacy_kwargs["ocr_version"] = v
+                            model = PaddleOCR(**legacy_kwargs)
+                            logger.info(f"Initialized PaddleOCR (legacy params) for lang='{lang}', version='{v or 'default'}'")
+                            break
+                    except Exception as ve:
+                        logger.warning(f"Version '{v}' init issue: {ve}. Trying next...")
+                        continue
+
+                if model is not None:
+                    self._instances[cache_key] = model
+                    return model
             except Exception as e:
-                logger.error(f"Failed to load PaddleOCR model: {e}. Reverting to fallback mode.")
+                logger.error(f"Failed to load PaddleOCR model: {e}.")
                 return None
         return None
 
-    def _fallback_extract(self, img: np.ndarray) -> List[OCRResultItem]:
-        """
-        Resilient heuristic text detector and structural region locator for rapid testing
-        and environments initializing weights.
-        """
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if len(img.shape) == 3 else img
-        h, w = gray.shape[:2]
-        
-        # Binary thresholding and contour detection
-        blur = cv2.GaussianBlur(gray, (5, 5), 0)
-        thresh = cv2.adaptiveThreshold(
-            blur, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 15, 4
-        )
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (15, 3))
-        dilated = cv2.dilate(thresh, kernel, iterations=2)
-        
-        contours, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        
-        results: List[OCRResultItem] = []
-        for idx, cnt in enumerate(contours):
-            x, y, cw, ch = cv2.boundingRect(cnt)
-            if cw > 20 and ch > 8 and cw < w * 0.98:
-                box = [
-                    [float(x), float(y)],
-                    [float(x + cw), float(y)],
-                    [float(x + cw), float(y + ch)],
-                    [float(x), float(y + ch)]
-                ]
-                # Default mock/heuristic tag
-                text = f"Text Block #{idx + 1}"
-                results.append(OCRResultItem(text=text, confidence=0.95, box=box))
+    def _parse_paddle_results(self, raw_results: Any) -> List[OCRResultItem]:
+        """Normalize results from PaddleOCR v2 or v3 pipelines into OCRResultItem list."""
+        items: List[OCRResultItem] = []
+        if not raw_results:
+            return items
 
-        # Sort top-to-bottom
-        results.sort(key=lambda item: (item.min_y, item.min_x))
-        return results
+        # Case 1: PaddleOCR v3 dictionary structure
+        if isinstance(raw_results, list) and len(raw_results) > 0 and isinstance(raw_results[0], dict):
+            for res_dict in raw_results:
+                rec_texts = res_dict.get("rec_texts", [])
+                rec_scores = res_dict.get("rec_scores", [])
+                rec_polys = res_dict.get("rec_polys")
+                if rec_polys is None:
+                    rec_polys = res_dict.get("dt_polys", [])
+                angles = res_dict.get("textline_orientation_angles", [])
+
+                for i, text in enumerate(rec_texts):
+                    score = float(rec_scores[i]) if i < len(rec_scores) else 1.0
+                    if score < settings.REC_CONFIDENCE_THRESH:
+                        continue
+                    poly = rec_polys[i] if i < len(rec_polys) else []
+                    box = poly.tolist() if isinstance(poly, np.ndarray) else poly
+                    angle = float(angles[i]) if i < len(angles) else 0.0
+                    items.append(OCRResultItem(text=text, confidence=score, box=box, angle=angle))
+            return items
+
+        # Case 2: PaddleOCR v2 list-of-lines structure [[[points], (text, score)], ...]
+        if isinstance(raw_results, list):
+            lines = raw_results[0] if len(raw_results) == 1 and isinstance(raw_results[0], list) else raw_results
+            for line in lines:
+                if not line or not isinstance(line, (list, tuple)) or len(line) < 2:
+                    continue
+                box = line[0]
+                text_info = line[1]
+                if isinstance(text_info, (list, tuple)) and len(text_info) >= 2:
+                    text, conf = text_info[0], float(text_info[1])
+                else:
+                    text, conf = str(text_info), 1.0
+
+                if conf >= settings.REC_CONFIDENCE_THRESH:
+                    poly_box = box.tolist() if isinstance(box, np.ndarray) else box
+                    items.append(OCRResultItem(text=text, confidence=conf, box=poly_box))
+
+        return items
 
     def process_image(
         self, 
         img: np.ndarray, 
-        preprocess: bool = True
+        preprocess: bool = False
     ) -> Tuple[List[OCRResultItem], Dict[str, Any]]:
         """
         Execute full OCR pipeline on an OpenCV image.
@@ -161,8 +247,8 @@ class OCREngine:
         start_time = time.time()
         meta: Dict[str, Any] = {
             "lang": self.lang,
-            "engine": settings.OCR_VERSION,
-            "device": "GPU" if self.use_gpu else "CPU"
+            "engine": self.ocr_version,
+            "device": self.device.upper()
         }
         
         # 1. Preprocessing
@@ -182,18 +268,14 @@ class OCREngine:
         items: List[OCRResultItem] = []
         if self.ocr_model is not None:
             try:
-                raw_results = self.ocr_model.ocr(processed_img, cls=self.use_angle_cls)
-                if raw_results and raw_results[0]:
-                    for line in raw_results[0]:
-                        box = line[0]  # [[x1,y1],[x2,y2],[x3,y3],[x4,y4]]
-                        text, conf = line[1]
-                        if conf >= settings.REC_CONFIDENCE_THRESH:
-                            items.append(OCRResultItem(text=text, confidence=conf, box=box))
+                if hasattr(self.ocr_model, "predict"):
+                    raw_results = list(self.ocr_model.predict(processed_img))
+                else:
+                    raw_results = self.ocr_model.ocr(processed_img, cls=False)
+                items = self._parse_paddle_results(raw_results)
             except Exception as e:
-                logger.error(f"Inference error in PaddleOCR: {e}. Invoking fallback extractor.")
-                items = self._fallback_extract(processed_img)
-        else:
-            items = self._fallback_extract(processed_img)
+                logger.error(f"Inference error in PaddleOCR: {e}.")
+                items = []
 
         # 3. Compute elapsed time
         elapsed_ms = (time.time() - start_time) * 1000.0

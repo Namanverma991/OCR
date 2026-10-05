@@ -10,8 +10,14 @@ services:
       - "8000:8000"
     environment:
       - DEBUG=False
-      - USE_GPU=False
+      - OCR_ENABLED=true
       - OCR_VERSION=PP-OCRv4
+      - OCR_DEVICE=cpu
+      - USE_GPU=False
+      - FLAGS_enable_pir_api=0
+      - FLAGS_use_mkldnn=0
+      - FLAGS_enable_onednn=0
+      - PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True
     volumes:
       - ../uploads:/app/uploads
       - ../outputs:/app/outputs

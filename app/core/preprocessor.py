@@ -1,7 +1,7 @@
 """
 Image Preprocessing Pipeline
 Provides robust computer vision operations for deskewing, noise filtering,
-CLAHE contrast amplification, and aspect-ratio preserving normalization.
+contrast normalization, and aspect-ratio preserving resizing.
 """
 
 import cv2
@@ -35,16 +35,16 @@ class ImagePreprocessor:
     @classmethod
     def enhance_contrast(cls, img: np.ndarray) -> np.ndarray:
         """
-        Apply Contrast Limited Adaptive Histogram Equalization (CLAHE)
-        on the Luminance channel (LAB color space) to make faint text distinct.
+        Apply gentle Contrast Limited Adaptive Histogram Equalization (CLAHE)
+        on the Luminance channel (LAB color space).
         """
         if len(img.shape) == 2:
-            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+            clahe = cv2.createCLAHE(clipLimit=1.5, tileGridSize=(8, 8))
             return clahe.apply(img)
         
         lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
         l, a, b = cv2.split(lab)
-        clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
+        clahe = cv2.createCLAHE(clipLimit=1.5, tileGridSize=(8, 8))
         cl = clahe.apply(l)
         limg = cv2.merge((cl, a, b))
         return cv2.cvtColor(limg, cv2.COLOR_LAB2BGR)
@@ -53,15 +53,17 @@ class ImagePreprocessor:
     def estimate_skew_angle(cls, gray: np.ndarray) -> float:
         """
         Estimate document skew angle using Hough Line Transform on morphological gradients.
-        Returns angle in degrees (-45.0 to 45.0).
+        Only applied on sufficiently large pages/documents.
         """
-        # Invert and threshold
+        h, w = gray.shape[:2]
+        if h < 400 or w < 400:
+            return 0.0
+
         blur = cv2.GaussianBlur(gray, (9, 9), 0)
         thresh = cv2.adaptiveThreshold(
             blur, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 11, 2
         )
         
-        # Dilate horizontally to connect words into lines
         kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (30, 3))
         dilated = cv2.dilate(thresh, kernel, iterations=2)
         
@@ -89,14 +91,13 @@ class ImagePreprocessor:
     @classmethod
     def rotate_image(cls, img: np.ndarray, angle: float) -> np.ndarray:
         """Rotate image around its center by the specified angle with background padding."""
-        if abs(angle) < 0.3:
+        if abs(angle) < 0.5:
             return img
 
         h, w = img.shape[:2]
         center = (w // 2, h // 2)
         rot_mat = cv2.getRotationMatrix2D(center, angle, 1.0)
         
-        # Calculate new bounding dimensions
         cos = np.abs(rot_mat[0, 0])
         sin = np.abs(rot_mat[0, 1])
         new_w = int((h * sin) + (w * cos))
@@ -117,7 +118,7 @@ class ImagePreprocessor:
         """Automatically detect document skew and correct it."""
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if len(img.shape) == 3 else img
         angle = cls.estimate_skew_angle(gray)
-        if abs(angle) >= 0.5:
+        if abs(angle) >= 0.8:
             return cls.rotate_image(img, angle), angle
         return img, 0.0
 
@@ -137,8 +138,8 @@ class ImagePreprocessor:
     def preprocess_pipeline(
         cls, 
         img: np.ndarray, 
-        auto_deskew: bool = True, 
-        enhance_contrast: bool = True,
+        auto_deskew: bool = False, 
+        enhance_contrast: bool = False,
         max_side: int = 2048
     ) -> Tuple[np.ndarray, dict]:
         """
@@ -154,12 +155,12 @@ class ImagePreprocessor:
         # 1. Resize if excessively large
         processed = cls.resize_max_side(img, max_side=max_side)
         
-        # 2. Deskew
+        # 2. Deskew if large document
         if auto_deskew:
             processed, angle = cls.deskew(processed)
             metadata["deskew_angle"] = round(angle, 2)
             
-        # 3. Contrast amplification
+        # 3. Contrast amplification if enabled
         if enhance_contrast:
             processed = cls.enhance_contrast(processed)
             metadata["contrast_enhanced"] = True

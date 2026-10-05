@@ -1,27 +1,26 @@
 """
-REST API Endpoints for OCR Processing
+REST API Endpoints for Document Ingestion and OCR Processing
 """
 
 import time
 import io
+from pathlib import Path
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, BackgroundTasks
 from fastapi.responses import JSONResponse
 import cv2
 import numpy as np
-from PIL import Image
-import pypdfium2 as pdfium
 
 from app.core.config import settings
 from app.core.preprocessor import ImagePreprocessor
 from app.core.ocr_engine import OCREngine, OCRResultItem
+from app.core.document_processor import DocumentProcessor
 from app.core.postprocessor import PostProcessor
-from app.core.layout_engine import LayoutEngine
 from app.api.schemas import (
-    OCRImageResponse, TableOCRResponse, StructuredOCRResponse, HealthResponse,
-    OCRResultModel, TableDataModel
+    OCRImageResponse, OCRDocumentResponse, TableOCRResponse, StructuredOCRResponse,
+    HealthResponse, OCRResultModel, TableDataModel, PageOCRResultModel
 )
 
-router = APIRouter(prefix="/api/v1", tags=["OCR Services"])
+router = APIRouter(prefix="/api/v1", tags=["Document & OCR Services"])
 
 
 @router.get("/health", response_model=HealthResponse)
@@ -32,7 +31,98 @@ async def health_check():
         version=settings.APP_VERSION,
         paddle_installed=OCREngine.check_paddle_installed(),
         default_engine=settings.OCR_VERSION,
+        device=settings.OCR_DEVICE,
         gpu_available=settings.USE_GPU
+    )
+
+
+@router.post("/ocr/upload", response_model=OCRDocumentResponse)
+@router.post("/ocr/document", response_model=OCRDocumentResponse)
+async def process_document_upload(
+    file: UploadFile = File(...),
+    lang: str = Form("en"),
+    preprocess: bool = Form(True),
+    use_angle_cls: bool = Form(True)
+):
+    """
+    Unified production document ingestion endpoint.
+    Accepts PDF, DOCX, and images (PNG, JPG, WEBP, TIFF, BMP).
+    Performs digital native text extraction when available,
+    and invokes PaddleOCR PP-OCRv6 Tiny CPU inference for scanned pages and images.
+    """
+    try:
+        content = await file.read()
+        if not content:
+            raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to read file: {str(e)}")
+
+    filename = file.filename or "uploaded_document"
+    processor = DocumentProcessor(
+        lang=lang,
+        device=settings.OCR_DEVICE,
+        use_angle_cls=use_angle_cls,
+        ocr_version=settings.OCR_VERSION
+    )
+
+    try:
+        result = processor.process(file_bytes=content, filename=filename, preprocess=preprocess)
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Internal document processing error: {str(e)}")
+
+    pages_models = [
+        PageOCRResultModel(
+            page_number=p["page_number"],
+            extraction_method=p["extraction_method"],
+            text=p["text"],
+            lines_count=p["lines_count"],
+            confidence=p["confidence"],
+            results=p.get("results", [])
+        )
+        for p in result.get("pages", [])
+    ]
+
+    table_models = [
+        TableDataModel(
+            rows=t.get("rows", 0),
+            cols=t.get("cols", 0),
+            headers=t.get("headers", []),
+            matrix=t.get("matrix", []),
+            csv=t.get("csv", ""),
+            markdown=t.get("markdown", "")
+        )
+        for t in result.get("tables", [])
+    ]
+
+    results_models = None
+    if "results" in result and result["results"]:
+        results_models = [
+            OCRResultModel(
+                text=it["text"],
+                confidence=it["confidence"],
+                box=it["box"],
+                center=it["center"],
+                width=it["width"],
+                height=it["height"],
+                angle=it.get("angle", 0.0)
+            )
+            for it in result["results"]
+        ]
+
+    return OCRDocumentResponse(
+        success=True,
+        filename=result["filename"],
+        file_type=result["file_type"],
+        total_pages=result["total_pages"],
+        processing_time_ms=result["processing_time_ms"],
+        full_text=result["full_text"],
+        pages=pages_models,
+        results=results_models,
+        entities=result.get("entities", {}),
+        tables=table_models,
+        meta=result.get("meta", {})
     )
 
 
@@ -44,7 +134,7 @@ async def process_image_ocr(
     use_angle_cls: bool = Form(True)
 ):
     """
-    Perform deep-learning OCR extraction on an uploaded image file.
+    Perform deep-learning OCR extraction on an uploaded image file using PP-OCRv6 Tiny.
     Returns extracted text lines, polygon coordinates, confidence, and full reading-order text.
     """
     try:
@@ -53,7 +143,12 @@ async def process_image_ocr(
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Invalid image file: {str(e)}")
 
-    engine = OCREngine(lang=lang, use_gpu=settings.USE_GPU, use_angle_cls=use_angle_cls)
+    engine = OCREngine(
+        lang=lang,
+        device=settings.OCR_DEVICE,
+        use_angle_cls=use_angle_cls,
+        ocr_version=settings.OCR_VERSION
+    )
     items, meta = engine.process_image(img, preprocess=preprocess)
 
     # Sort in reading order
@@ -84,13 +179,25 @@ async def process_image_ocr(
     )
 
 
+@router.post("/ocr/pdf", response_model=OCRDocumentResponse)
+async def process_pdf_ocr(
+    file: UploadFile = File(...),
+    lang: str = Form("en"),
+    preprocess: bool = Form(True)
+):
+    """
+    Process multi-page PDF documents page-by-page.
+    """
+    return await process_document_upload(file=file, lang=lang, preprocess=preprocess)
+
+
 @router.post("/ocr/table", response_model=TableOCRResponse)
 async def process_table_ocr(
     file: UploadFile = File(...),
     lang: str = Form("en")
 ):
     """
-    Detect and extract tabular structures from images.
+    Detect and extract tabular structures from documents/images.
     Returns 2D matrix, CSV data, and Markdown table representation.
     """
     try:
@@ -99,7 +206,7 @@ async def process_table_ocr(
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Invalid image file: {str(e)}")
 
-    engine = OCREngine(lang=lang, use_gpu=settings.USE_GPU)
+    engine = OCREngine(lang=lang, device=settings.OCR_DEVICE, ocr_version=settings.OCR_VERSION)
     items, meta = engine.process_image(img, preprocess=True)
     table_data = PostProcessor.reconstruct_table(items)
 
@@ -135,7 +242,7 @@ async def process_structured_ocr(
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Invalid image file: {str(e)}")
 
-    engine = OCREngine(lang=lang, use_gpu=settings.USE_GPU)
+    engine = OCREngine(lang=lang, device=settings.OCR_DEVICE, ocr_version=settings.OCR_VERSION)
     items, meta = engine.process_image(img, preprocess=True)
     full_text = PostProcessor.assemble_full_text(items)
     entities = PostProcessor.extract_structured_entities(full_text)

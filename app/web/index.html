@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PaddleOCR Studio • Next-Gen Neural Document & OCR Intelligence</title>
+    <title>PaddleOCR Studio • Document Ingestion & Text Extraction</title>
     <!-- Google Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -27,20 +27,17 @@
                 </div>
                 <div>
                     <h1 class="logo-title">PaddleOCR <span class="gradient-text">Studio</span></h1>
-                    <p class="logo-subtitle">PP-OCRv4 Deep Learning Engine • Differentiable Binarization & SVTR</p>
+                    <p class="logo-subtitle">PP-OCRv6 Tiny Engine • Optimized CPU Document & Text Ingestion</p>
                 </div>
             </div>
             
             <div class="header-right">
                 <div class="status-chip" id="system-status">
                     <span class="pulse-dot"></span>
-                    <span id="status-text">Engine Online (CPU/GPU Ready)</span>
+                    <span id="status-text">PP-OCRv6 Tiny (CPU Online)</span>
                 </div>
                 <a href="/docs" target="_blank" class="glass-btn small-btn">
                     <i class="fa-solid fa-code"></i> API Docs
-                </a>
-                <a href="https://github.com/PaddlePaddle/PaddleOCR" target="_blank" class="glass-btn small-btn github-btn">
-                    <i class="fa-brands fa-github"></i> GitHub
                 </a>
             </div>
         </header>
@@ -55,17 +52,23 @@
 
                 <!-- Dropzone -->
                 <div class="upload-zone" id="drop-zone">
-                    <input type="file" id="file-input" accept="image/*,application/pdf" hidden>
+                    <input type="file" id="file-input" accept="image/*,application/pdf,.docx,.doc,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden>
                     <div class="upload-content">
                         <div class="upload-icon-circle">
                             <i class="fa-solid fa-cloud-arrow-up"></i>
                         </div>
                         <h3>Drag & drop document or image</h3>
-                        <p>Supports PNG, JPG, WEBP, TIFF, BMP (Up to 25MB)</p>
+                        <p>Supports PDF, DOCX, PNG, JPG, WEBP, TIFF, BMP (Up to 50MB)</p>
                         <button type="button" class="glass-btn primary-btn" id="browse-btn">
                             <i class="fa-solid fa-folder-open"></i> Browse Files
                         </button>
                     </div>
+                </div>
+
+                <!-- Selected File Banner -->
+                <div class="selected-file-info" id="selected-file-info" style="display: none; margin: 12px 0; padding: 10px 14px; background: rgba(255,255,255,0.04); border-radius: 8px; border: 1px solid rgba(255,255,255,0.08); font-size: 0.85rem; color: #e2e8f0; align-items: center; justify-content: space-between;">
+                    <span id="file-name-display" style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"><i class="fa-solid fa-file-lines" style="color: #06b6d4; margin-right: 8px;"></i> No file selected</span>
+                    <span id="file-size-display" style="color: #94a3b8; font-size: 0.8rem; margin-left: 10px;"></span>
                 </div>
 
                 <!-- Configuration Options -->
@@ -92,11 +95,6 @@
                             <span class="toggle-label">Auto-Deskew & Align</span>
                         </label>
                         <label class="toggle-item">
-                            <input type="checkbox" id="contrast-toggle" checked>
-                            <span class="toggle-slider"></span>
-                            <span class="toggle-label">CLAHE Contrast Boost</span>
-                        </label>
-                        <label class="toggle-item">
                             <input type="checkbox" id="angle-cls-toggle" checked>
                             <span class="toggle-slider"></span>
                             <span class="toggle-label">Direction Classifier (180°)</span>
@@ -105,11 +103,8 @@
 
                     <!-- Action Buttons -->
                     <div class="action-buttons-row">
-                        <button class="glass-btn run-btn" id="process-btn" disabled>
-                            <i class="fa-solid fa-bolt"></i> Run OCR Extraction
-                        </button>
-                        <button class="glass-btn secondary-btn" id="sample-btn">
-                            <i class="fa-solid fa-file-invoice"></i> Load Sample Invoice
+                        <button class="glass-btn run-btn" id="process-btn" disabled style="width: 100%;">
+                            <i class="fa-solid fa-bolt"></i> Run Ingestion & Extraction
                         </button>
                     </div>
                 </div>
@@ -118,7 +113,7 @@
             <!-- Center Panel: Interactive Visualizer -->
             <section class="card glass-card center-panel">
                 <div class="panel-header flex-between">
-                    <h2><i class="fa-solid fa-eye"></i> Visual Box Inspector</h2>
+                    <h2><i class="fa-solid fa-eye"></i> Document & Box Inspector</h2>
                     <div class="canvas-tools" id="canvas-tools" style="display: none;">
                         <button class="tool-btn" id="zoom-in-btn" title="Zoom In"><i class="fa-solid fa-magnifying-glass-plus"></i></button>
                         <button class="tool-btn" id="zoom-out-btn" title="Zoom Out"><i class="fa-solid fa-magnifying-glass-minus"></i></button>
@@ -131,8 +126,19 @@
 
                 <div class="viewport-wrapper" id="viewport-wrapper">
                     <div class="placeholder-state" id="canvas-placeholder">
-                        <i class="fa-solid fa-image-polaroid placeholder-icon"></i>
-                        <p>Upload a document to inspect detection bounding boxes and confidence heatmaps</p>
+                        <i class="fa-solid fa-file-invoice placeholder-icon"></i>
+                        <p>Upload a document (PDF, DOCX, or Image) to inspect extracted text, bounding boxes, and metadata</p>
+                    </div>
+
+                    <div class="document-summary-box" id="doc-summary-box" style="display: none; padding: 24px; text-align: left; color: #e2e8f0; width: 100%; height: 100%; overflow-y: auto;">
+                        <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 16px;">
+                            <i class="fa-solid fa-file-pdf" id="doc-icon" style="font-size: 2rem; color: #06b6d4;"></i>
+                            <div>
+                                <h3 id="doc-title" style="margin: 0; font-size: 1.1rem; color: #f8fafc;">Document Details</h3>
+                                <p id="doc-meta-sub" style="margin: 4px 0 0; color: #94a3b8; font-size: 0.85rem;">Ready for processing</p>
+                            </div>
+                        </div>
+                        <div id="doc-pages-list" style="display: flex; flex-direction: column; gap: 10px;"></div>
                     </div>
                     
                     <div class="canvas-container" id="canvas-container" style="display: none;">
@@ -157,7 +163,7 @@
                         <span class="metric-val" id="metric-time">-- ms</span>
                     </div>
                     <div class="metric-item">
-                        <span class="metric-label">Detected Lines</span>
+                        <span class="metric-label">Pages / Lines</span>
                         <span class="metric-val" id="metric-lines">--</span>
                     </div>
                     <div class="metric-item">
@@ -166,7 +172,7 @@
                     </div>
                     <div class="metric-item">
                         <span class="metric-label">Algorithm</span>
-                        <span class="metric-val" id="metric-algo">PP-OCRv4 (DBNet + SVTR)</span>
+                        <span class="metric-val" id="metric-algo">PP-OCRv6 Tiny (CPU)</span>
                     </div>
                 </div>
             </section>
@@ -187,16 +193,16 @@
                             <button class="glass-btn small-btn" id="copy-text-btn"><i class="fa-regular fa-copy"></i> Copy</button>
                             <button class="glass-btn small-btn" id="download-txt-btn"><i class="fa-solid fa-download"></i> TXT</button>
                         </div>
-                        <textarea id="output-text-area" class="code-editor" readonly placeholder="Extracted text will appear here in human reading order..."></textarea>
+                        <textarea id="output-text-area" class="code-editor" readonly placeholder="Extracted text will appear here in natural reading order..."></textarea>
                     </div>
 
                     <!-- Tab 2: Structured Entities -->
                     <div class="tab-pane" id="tab-entities">
                         <div class="pane-actions">
-                            <button class="glass-btn small-btn" id="extract-entities-btn"><i class="fa-solid fa-wand-magic-sparkles"></i> Auto-Parse</button>
+                            <span style="color: #94a3b8; font-size: 0.8rem;"><i class="fa-solid fa-wand-magic-sparkles"></i> Auto-Extracted Entities</span>
                         </div>
                         <div class="entities-container" id="entities-container">
-                            <p class="empty-state-text">Click "Auto-Parse" or run OCR to extract Invoices, Dates, Tax IDs, and Totals.</p>
+                            <p class="empty-state-text">Entities (Invoices, Dates, Tax IDs, Totals, Contacts) will appear here after document ingestion.</p>
                         </div>
                     </div>
 

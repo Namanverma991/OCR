@@ -1,5 +1,6 @@
 /**
  * PaddleOCR Studio Frontend Interactive Application
+ * Production Ingestion Pipeline with PP-OCRv6 Tiny CPU Support
  */
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -8,15 +9,23 @@ document.addEventListener('DOMContentLoaded', () => {
     const fileInput = document.getElementById('file-input');
     const browseBtn = document.getElementById('browse-btn');
     const processBtn = document.getElementById('process-btn');
-    const sampleBtn = document.getElementById('sample-btn');
     const langSelect = document.getElementById('lang-select');
     const deskewToggle = document.getElementById('deskew-toggle');
-    const contrastToggle = document.getElementById('contrast-toggle');
     const angleClsToggle = document.getElementById('angle-cls-toggle');
+
+    const selectedFileInfo = document.getElementById('selected-file-info');
+    const fileNameDisplay = document.getElementById('file-name-display');
+    const fileSizeDisplay = document.getElementById('file-size-display');
 
     const viewportWrapper = document.getElementById('viewport-wrapper');
     const canvasContainer = document.getElementById('canvas-container');
     const canvasPlaceholder = document.getElementById('canvas-placeholder');
+    const docSummaryBox = document.getElementById('doc-summary-box');
+    const docTitle = document.getElementById('doc-title');
+    const docMetaSub = document.getElementById('doc-meta-sub');
+    const docPagesList = document.getElementById('doc-pages-list');
+    const docIcon = document.getElementById('doc-icon');
+
     const sourceImage = document.getElementById('source-image');
     const overlayCanvas = document.getElementById('overlay-canvas');
     const canvasTools = document.getElementById('canvas-tools');
@@ -43,12 +52,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const downloadJsonBtn = document.getElementById('download-json-btn');
     const downloadCsvBtn = document.getElementById('download-csv-btn');
     const downloadMdBtn = document.getElementById('download-md-btn');
-    const extractEntitiesBtn = document.getElementById('extract-entities-btn');
 
     let currentFile = null;
-    let ocrResults = null;
+    let documentResults = null;
     let hoveredBoxIndex = -1;
-    let scaleRatio = 1.0;
 
     // --- File Drag and Drop Handlers ---
     browseBtn.addEventListener('click', () => fileInput.click());
@@ -81,22 +88,61 @@ document.addEventListener('DOMContentLoaded', () => {
         if (e.target.files.length > 0) handleFileSelection(e.target.files[0]);
     });
 
+    function formatFileSize(bytes) {
+        if (bytes < 1024) return bytes + ' B';
+        if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+        return (bytes / 1048576).toFixed(1) + ' MB';
+    }
+
     function handleFileSelection(file) {
         currentFile = file;
         processBtn.disabled = false;
         
-        const reader = new FileReader();
-        reader.onload = (e) => {
-            sourceImage.src = e.target.result;
-            sourceImage.onload = () => {
-                canvasPlaceholder.style.display = 'none';
-                canvasContainer.style.display = 'inline-block';
-                canvasTools.style.display = 'flex';
-                setupCanvas();
-                showToast(`Loaded "${file.name}" ready for OCR`);
+        // Show file banner
+        selectedFileInfo.style.display = 'flex';
+        fileNameDisplay.innerHTML = `<i class="fa-solid fa-file-lines" style="color: #06b6d4; margin-right: 8px;"></i> ${escapeHtml(file.name)}`;
+        fileSizeDisplay.textContent = formatFileSize(file.size);
+
+        const isImage = file.type.startsWith('image/');
+        const isPdf = file.name.toLowerCase().endsWith('.pdf') || file.type === 'application/pdf';
+        const isDocx = file.name.toLowerCase().endsWith('.docx') || file.name.toLowerCase().endsWith('.doc');
+
+        if (isImage) {
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                sourceImage.src = e.target.result;
+                sourceImage.onload = () => {
+                    canvasPlaceholder.style.display = 'none';
+                    docSummaryBox.style.display = 'none';
+                    canvasContainer.style.display = 'inline-block';
+                    canvasTools.style.display = 'flex';
+                    setupCanvas();
+                    showToast(`Loaded image "${file.name}" ready for OCR`);
+                };
             };
-        };
-        reader.readAsDataURL(file);
+            reader.readAsDataURL(file);
+        } else {
+            canvasContainer.style.display = 'none';
+            canvasTools.style.display = 'none';
+            canvasPlaceholder.style.display = 'none';
+            docSummaryBox.style.display = 'block';
+
+            if (isPdf) {
+                docIcon.className = 'fa-solid fa-file-pdf';
+                docIcon.style.color = '#ef4444';
+            } else if (isDocx) {
+                docIcon.className = 'fa-solid fa-file-word';
+                docIcon.style.color = '#3b82f6';
+            } else {
+                docIcon.className = 'fa-solid fa-file-lines';
+                docIcon.style.color = '#06b6d4';
+            }
+
+            docTitle.textContent = file.name;
+            docMetaSub.textContent = `Size: ${formatFileSize(file.size)} • Click 'Run Ingestion' to extract`;
+            docPagesList.innerHTML = '<p style="color: #94a3b8; font-size: 0.9rem;">Document ready for extraction.</p>';
+            showToast(`Loaded document "${file.name}"`);
+        }
     }
 
     // --- Tab Switching ---
@@ -106,14 +152,15 @@ document.addEventListener('DOMContentLoaded', () => {
             tabBtns.forEach(b => b.classList.remove('active'));
             tabPanes.forEach(p => p.classList.remove('active'));
             btn.classList.add('active');
-            document.getElementById(target).classList.add('active');
+            const targetPane = document.getElementById(target);
+            if (targetPane) targetPane.classList.add('active');
         });
     });
 
     // --- Canvas & Box Drawing ---
     function setupCanvas() {
-        const naturalW = sourceImage.naturalWidth;
-        const naturalH = sourceImage.naturalHeight;
+        const naturalW = sourceImage.naturalWidth || 800;
+        const naturalH = sourceImage.naturalHeight || 600;
         
         overlayCanvas.width = naturalW;
         overlayCanvas.height = naturalH;
@@ -125,9 +172,10 @@ document.addEventListener('DOMContentLoaded', () => {
         const ctx = overlayCanvas.getContext('2d');
         ctx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
 
-        if (!ocrResults || !showBoxesChk.checked) return;
+        const boxesToDraw = getActiveBoxes();
+        if (!boxesToDraw || !showBoxesChk.checked) return;
 
-        ocrResults.results.forEach((item, idx) => {
+        boxesToDraw.forEach((item, idx) => {
             const isHovered = idx === hoveredBoxIndex;
             const pts = item.box;
             if (!pts || pts.length < 4) return;
@@ -164,9 +212,24 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    function getActiveBoxes() {
+        if (!documentResults) return null;
+        if (documentResults.results && documentResults.results.length > 0) {
+            return documentResults.results;
+        }
+        if (documentResults.pages && documentResults.pages.length > 0) {
+            const firstPage = documentResults.pages[0];
+            if (firstPage.results && firstPage.results.length > 0) {
+                return firstPage.results;
+            }
+        }
+        return null;
+    }
+
     // --- Canvas Mouse Hover / Tooltip ---
     overlayCanvas.addEventListener('mousemove', (e) => {
-        if (!ocrResults || !ocrResults.results) return;
+        const boxes = getActiveBoxes();
+        if (!boxes) return;
 
         const rect = overlayCanvas.getBoundingClientRect();
         const scaleX = overlayCanvas.width / rect.width;
@@ -176,10 +239,10 @@ document.addEventListener('DOMContentLoaded', () => {
         const mouseY = (e.clientY - rect.top) * scaleY;
 
         let foundIdx = -1;
-        for (let i = 0; i < ocrResults.results.length; i++) {
-            const item = ocrResults.results[i];
+        for (let i = 0; i < boxes.length; i++) {
+            const item = boxes[i];
             const pts = item.box;
-            if (isPointInPolygon([mouseX, mouseY], pts)) {
+            if (pts && isPointInPolygon([mouseX, mouseY], pts)) {
                 foundIdx = i;
                 break;
             }
@@ -187,7 +250,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (foundIdx !== -1) {
             hoveredBoxIndex = foundIdx;
-            const item = ocrResults.results[foundIdx];
+            const item = boxes[foundIdx];
             
             // Show Tooltip
             boxTooltip.style.display = 'block';
@@ -229,7 +292,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!currentFile) return;
 
         processBtn.disabled = true;
-        processBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Processing Neural Pipeline...';
+        processBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Processing Document...';
 
         const formData = new FormData();
         formData.append('file', currentFile);
@@ -238,204 +301,159 @@ document.addEventListener('DOMContentLoaded', () => {
         formData.append('use_angle_cls', angleClsToggle.checked ? 'true' : 'false');
 
         try {
-            const res = await fetch('/api/v1/ocr/image', {
+            const res = await fetch('/api/v1/ocr/upload', {
                 method: 'POST',
                 body: formData
             });
 
-            if (!res.ok) throw new Error(`Server returned status: ${res.status}`);
+            if (!res.ok) {
+                const errData = await res.json().catch(() => ({}));
+                throw new Error(errData.detail || `Server error (HTTP ${res.status})`);
+            }
             
-            ocrResults = await res.json();
-            renderOCRResults(ocrResults);
-            showToast('OCR extraction completed successfully!');
-            
-            // Also query structured & table endpoints in parallel
-            fetchStructured(currentFile);
-            fetchTable(currentFile);
+            documentResults = await res.json();
+            renderDocumentResults(documentResults);
+            showToast('Document processed successfully!');
 
         } catch (err) {
             console.error(err);
             showToast(`Error: ${err.message}`, true);
         } finally {
             processBtn.disabled = false;
-            processBtn.innerHTML = '<i class="fa-solid fa-bolt"></i> Run OCR Extraction';
+            processBtn.innerHTML = '<i class="fa-solid fa-bolt"></i> Run Ingestion & Extraction';
         }
     });
 
-    function renderOCRResults(data) {
+    function renderDocumentResults(data) {
         // Update metrics
         metricTime.textContent = `${data.processing_time_ms} ms`;
-        metricLines.textContent = data.total_lines;
         
+        let totalCount = 0;
         let avgConf = 0;
-        if (data.results && data.results.length > 0) {
+        let confSum = 0;
+        let confCount = 0;
+
+        if (data.pages && data.pages.length > 0) {
+            totalCount = `${data.total_pages || data.pages.length} Pages`;
+            data.pages.forEach(p => {
+                if (p.confidence > 0) {
+                    confSum += p.confidence;
+                    confCount++;
+                }
+            });
+            avgConf = confCount > 0 ? (confSum / confCount) : 1.0;
+        } else if (data.results && data.results.length > 0) {
+            totalCount = `${data.results.length} Lines`;
             avgConf = data.results.reduce((acc, it) => acc + it.confidence, 0) / data.results.length;
+        } else {
+            totalCount = `1 Doc`;
+            avgConf = 1.0;
         }
+
+        metricLines.textContent = totalCount;
         metricConf.textContent = `${(avgConf * 100).toFixed(1)}%`;
 
         // Text Pane
-        outputTextArea.value = data.full_text;
+        outputTextArea.value = data.full_text || '';
+
+        // Entities Pane
+        renderEntities(data.entities || {});
+
+        // Tables Pane
+        renderTableData(data.tables || []);
 
         // JSON Pane
         jsonViewerPre.querySelector('code').textContent = JSON.stringify(data, null, 2);
 
-        // Render Canvas
-        setupCanvas();
-    }
+        // Visualizer / Document Breakdown
+        if (data.file_type === 'image' && canvasContainer.style.display !== 'none') {
+            setupCanvas();
+        } else if (data.pages && data.pages.length > 0) {
+            docPagesList.innerHTML = '';
+            data.pages.forEach(page => {
+                const pdiv = document.createElement('div');
+                pdiv.style.padding = '12px 16px';
+                pdiv.style.background = 'rgba(255,255,255,0.03)';
+                pdiv.style.border = '1px solid rgba(255,255,255,0.08)';
+                pdiv.style.borderRadius = '8px';
+                pdiv.style.marginBottom = '8px';
 
-    async function fetchStructured(file) {
-        try {
-            const formData = new FormData();
-            formData.append('file', file);
-            const res = await fetch('/api/v1/ocr/structured', { method: 'POST', body: formData });
-            if (res.ok) {
-                const sdata = await res.json();
-                renderEntities(sdata.entities);
-            }
-        } catch (e) {
-            console.warn('Structured parse failed', e);
+                const badgeColor = page.extraction_method.includes('ocr') ? '#06b6d4' : '#10b981';
+                const methodLabel = page.extraction_method.includes('ocr') ? 'PP-OCRv6 Tiny (OCR)' : 'Digital Text (Native)';
+
+                pdiv.innerHTML = `
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                        <strong style="color: #f8fafc; font-size: 0.9rem;">Page ${page.page_number}</strong>
+                        <span style="font-size: 0.75rem; padding: 2px 8px; border-radius: 4px; background: rgba(6,182,212,0.15); color: ${badgeColor}; border: 1px solid ${badgeColor}40;">${methodLabel}</span>
+                    </div>
+                    <div style="font-size: 0.8rem; color: #94a3b8; max-height: 80px; overflow: hidden; text-overflow: ellipsis; white-space: pre-wrap;">${escapeHtml(page.text.substring(0, 200))}${page.text.length > 200 ? '...' : ''}</div>
+                `;
+                docPagesList.appendChild(pdiv);
+            });
         }
     }
 
     function renderEntities(entities) {
         entitiesContainer.innerHTML = '';
         const keys = Object.keys(entities);
-        if (keys.length === 0) {
-            entitiesContainer.innerHTML = '<p class="empty-state-text">No entities extracted.</p>';
-            return;
-        }
+        let count = 0;
 
         keys.forEach(k => {
             const val = entities[k];
             if (!val || (Array.isArray(val) && val.length === 0)) return;
 
+            count++;
             const row = document.createElement('div');
             row.className = 'entity-row';
             const displayVal = Array.isArray(val) ? val.join(', ') : val;
             row.innerHTML = `
-                <span class="entity-key">${k.replace(/_/g, ' ')}</span>
-                <span class="entity-val">${displayVal}</span>
+                <span class="entity-key">${escapeHtml(k.replace(/_/g, ' '))}</span>
+                <span class="entity-val">${escapeHtml(String(displayVal))}</span>
             `;
             entitiesContainer.appendChild(row);
         });
-    }
 
-    async function fetchTable(file) {
-        try {
-            const formData = new FormData();
-            formData.append('file', file);
-            const res = await fetch('/api/v1/ocr/table', { method: 'POST', body: formData });
-            if (res.ok) {
-                const tdata = await res.json();
-                renderTableData(tdata);
-            }
-        } catch (e) {
-            console.warn('Table extract failed', e);
+        if (count === 0) {
+            entitiesContainer.innerHTML = '<p class="empty-state-text">No structured business entities identified in document.</p>';
         }
     }
 
-    function renderTableData(tdata) {
-        if (!tdata.tables || tdata.tables.length === 0 || tdata.tables[0].rows === 0) {
-            tableRenderArea.innerHTML = '<p class="empty-state-text">No tables detected in document.</p>';
+    function renderTableData(tables) {
+        if (!tables || tables.length === 0 || tables[0].rows === 0) {
+            tableRenderArea.innerHTML = '<p class="empty-state-text">No tabular structures detected in document.</p>';
             return;
         }
 
-        const table = tdata.tables[0];
-        let html = '<table class="custom-table">';
-        
-        if (table.headers && table.headers.length > 0) {
-            html += '<thead><tr>';
-            table.headers.forEach(h => html += `<th>${h}</th>`);
-            html += '</tr></thead>';
-        }
+        let fullHtml = '';
+        tables.forEach((table, tIdx) => {
+            let html = `<div style="margin-bottom: 20px;"><div style="font-size: 0.85rem; color: #94a3b8; margin-bottom: 8px;"><i class="fa-solid fa-table"></i> Table ${tIdx + 1} (${table.rows} rows × ${table.cols} cols)</div><table class="custom-table">`;
+            
+            if (table.headers && table.headers.length > 0) {
+                html += '<thead><tr>';
+                table.headers.forEach(h => html += `<th>${escapeHtml(h)}</th>`);
+                html += '</tr></thead>';
+            }
 
-        html += '<tbody>';
-        table.matrix.slice(1).forEach(row => {
-            html += '<tr>';
-            row.forEach(cell => html += `<td>${cell}</td>`);
-            html += '</tr>';
+            html += '<tbody>';
+            const bodyRows = table.headers && table.headers.length > 0 ? table.matrix.slice(1) : table.matrix;
+            bodyRows.forEach(row => {
+                html += '<tr>';
+                row.forEach(cell => html += `<td>${escapeHtml(cell)}</td>`);
+                html += '</tr>';
+            });
+            html += '</tbody></table></div>';
+            fullHtml += html;
         });
-        html += '</tbody></table>';
 
-        tableRenderArea.innerHTML = html;
+        tableRenderArea.innerHTML = fullHtml;
     }
 
-    // --- Sample Invoice Generator ---
-    sampleBtn.addEventListener('click', () => {
-        const canvas = document.createElement('canvas');
-        canvas.width = 700;
-        canvas.height = 900;
-        const ctx = canvas.getContext('2d');
-
-        // Draw Invoice Sample
-        ctx.fillStyle = '#ffffff';
-        ctx.fillRect(0, 0, 700, 900);
-
-        ctx.fillStyle = '#1e293b';
-        ctx.font = 'bold 28px sans-serif';
-        ctx.fillText('ACME SOLUTIONS INC.', 50, 70);
-
-        ctx.font = '14px sans-serif';
-        ctx.fillStyle = '#64748b';
-        ctx.fillText('104 Innovation Way, Tech Park, CA 94016', 50, 95);
-        ctx.fillText('support@acmesolutions.ai | +1 (555) 019-2834', 50, 115);
-
-        ctx.strokeStyle = '#e2e8f0';
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.moveTo(50, 135);
-        ctx.lineTo(650, 135);
-        ctx.stroke();
-
-        ctx.fillStyle = '#0f172a';
-        ctx.font = 'bold 18px sans-serif';
-        ctx.fillText('TAX INVOICE', 50, 175);
-        ctx.font = '14px sans-serif';
-        ctx.fillText('Invoice Number: INV-2026-9941', 50, 205);
-        ctx.fillText('Invoice Date: Oct 05, 2026', 50, 230);
-        ctx.fillText('Tax ID: US-991204-TAX', 50, 255);
-
-        // Table Header
-        ctx.fillStyle = '#f1f5f9';
-        ctx.fillRect(50, 300, 600, 35);
-        ctx.fillStyle = '#0f172a';
-        ctx.font = 'bold 14px sans-serif';
-        ctx.fillText('Description', 65, 323);
-        ctx.fillText('Qty', 380, 323);
-        ctx.fillText('Rate ($)', 460, 323);
-        ctx.fillText('Amount ($)', 560, 323);
-
-        // Table Rows
-        const items = [
-            ['PaddleOCR Neural Engine License', '1', '1200.00', '1200.00'],
-            ['GPU Acceleration Pipeline Addon', '2', '450.00', '900.00'],
-            ['High-Throughput Batch Processing', '1', '650.00', '650.00'],
-            ['Cloud Multi-Region SLA Support', '1', '350.00', '350.00']
-        ];
-
-        ctx.font = '13px sans-serif';
-        let y = 365;
-        items.forEach((row, i) => {
-            ctx.fillStyle = i % 2 === 0 ? '#ffffff' : '#f8fafc';
-            ctx.fillRect(50, y - 20, 600, 30);
-            ctx.fillStyle = '#334155';
-            ctx.fillText(row[0], 65, y);
-            ctx.fillText(row[1], 380, y);
-            ctx.fillText(row[2], 460, y);
-            ctx.fillText(row[3], 560, y);
-            y += 35;
-        });
-
-        // Totals
-        ctx.fillStyle = '#0f172a';
-        ctx.font = 'bold 16px sans-serif';
-        ctx.fillText('Total Amount Due: $3,100.00', 410, 560);
-
-        canvas.toBlob((blob) => {
-            const sampleFile = new File([blob], 'sample_invoice.png', { type: 'image/png' });
-            handleFileSelection(sampleFile);
-        });
-    });
+    function escapeHtml(text) {
+        if (!text) return '';
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
 
     // --- Clipboard & Downloads ---
     copyTextBtn.addEventListener('click', () => {
@@ -444,8 +462,8 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     copyJsonBtn.addEventListener('click', () => {
-        if (ocrResults) {
-            navigator.clipboard.writeText(JSON.stringify(ocrResults, null, 2));
+        if (documentResults) {
+            navigator.clipboard.writeText(JSON.stringify(documentResults, null, 2));
             showToast('JSON copied to clipboard!');
         }
     });
@@ -455,8 +473,26 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     downloadJsonBtn.addEventListener('click', () => {
-        if (ocrResults) {
-            downloadFile('ocr_results.json', JSON.stringify(ocrResults, null, 2), 'application/json');
+        if (documentResults) {
+            downloadFile('ocr_document_results.json', JSON.stringify(documentResults, null, 2), 'application/json');
+        }
+    });
+
+    downloadCsvBtn.addEventListener('click', () => {
+        if (documentResults && documentResults.tables && documentResults.tables.length > 0) {
+            const combinedCsv = documentResults.tables.map(t => t.csv).join('\n\n');
+            downloadFile('extracted_tables.csv', combinedCsv, 'text/csv');
+        } else {
+            showToast('No tabular data to export.', true);
+        }
+    });
+
+    downloadMdBtn.addEventListener('click', () => {
+        if (documentResults && documentResults.tables && documentResults.tables.length > 0) {
+            const combinedMd = documentResults.tables.map(t => t.markdown).join('\n\n');
+            downloadFile('extracted_tables.md', combinedMd, 'text/markdown');
+        } else {
+            showToast('No tabular data to export.', true);
         }
     });
 
