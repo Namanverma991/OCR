@@ -441,8 +441,6 @@ body {
     background: radial-gradient(circle at 50% 50%, rgba(15, 23, 42, 0.7) 0%, rgba(2, 6, 23, 0.95) 100%);
     overflow: auto;
     display: flex;
-    align-items: center;
-    justify-content: center;
     min-height: 0;
     padding: 20px;
     box-sizing: border-box;
@@ -452,6 +450,7 @@ body {
     text-align: center;
     color: var(--text-dim);
     padding: 30px;
+    margin: auto;
 }
 
 .placeholder-icon {
@@ -463,13 +462,14 @@ body {
 
 .canvas-container {
     position: relative;
-    display: inline-block;
+    display: block;
     flex-shrink: 0;
     box-shadow: 0 10px 30px rgba(0, 0, 0, 0.7), 0 0 1px rgba(255, 255, 255, 0.25);
     border-radius: 4px;
     overflow: hidden;
     line-height: 0;
     margin: auto;
+    transition: width 0.12s ease-out, height 0.12s ease-out;
 }
 
 #source-image {

@@ -6,7 +6,7 @@ contrast normalization, and aspect-ratio preserving resizing.
 
 import cv2
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageOps
 import io
 from typing import Tuple, Union, Optional
 import math
@@ -17,12 +17,25 @@ class ImagePreprocessor:
 
     @staticmethod
     def bytes_to_cv2(image_bytes: bytes) -> np.ndarray:
-        """Convert raw binary bytes into an OpenCV BGR numpy array."""
-        nparr = np.frombuffer(image_bytes, np.uint8)
-        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-        if img is None:
-            raise ValueError("Invalid image format or corrupted bytes.")
-        return img
+        """
+        Convert raw binary bytes into an OpenCV BGR numpy array.
+        Automatically applies EXIF orientation transpose so mobile/WhatsApp photos match visual browser orientation.
+        """
+        try:
+            pil_img = Image.open(io.BytesIO(image_bytes))
+            # Handle mobile & WhatsApp camera EXIF orientation tags
+            pil_img = ImageOps.exif_transpose(pil_img)
+            if pil_img.mode != "RGB":
+                pil_img = pil_img.convert("RGB")
+            img = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+            return img
+        except Exception:
+            # Fallback direct OpenCV decoding
+            nparr = np.frombuffer(image_bytes, np.uint8)
+            img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+            if img is None:
+                raise ValueError("Invalid image format or corrupted bytes.")
+            return img
 
     @staticmethod
     def cv2_to_bytes(img: np.ndarray, ext: str = ".jpg") -> bytes:
