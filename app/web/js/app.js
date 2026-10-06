@@ -145,6 +145,14 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    const zoomInBtn = document.getElementById('zoom-in-btn');
+    const zoomOutBtn = document.getElementById('zoom-out-btn');
+    const resetZoomBtn = document.getElementById('reset-zoom-btn');
+
+    let currentZoom = 1.0;
+    const MIN_ZOOM = 0.3;
+    const MAX_ZOOM = 4.0;
+
     // --- Tab Switching ---
     tabBtns.forEach(btn => {
         btn.addEventListener('click', () => {
@@ -157,16 +165,87 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     });
 
-    // --- Canvas & Box Drawing ---
-    function setupCanvas() {
-        const naturalW = sourceImage.naturalWidth || 800;
-        const naturalH = sourceImage.naturalHeight || 600;
-        
-        overlayCanvas.width = naturalW;
-        overlayCanvas.height = naturalH;
-        
+    // --- Dynamic Canvas & Box Layout Engine ---
+    function updateCanvasLayout() {
+        if (!sourceImage.src || sourceImage.style.display === 'none' || canvasContainer.style.display === 'none') {
+            return;
+        }
+
+        const naturalW = sourceImage.naturalWidth;
+        const naturalH = sourceImage.naturalHeight;
+        if (!naturalW || !naturalH) return;
+
+        // Viewport dimensions with padding
+        const pad = 40;
+        const viewW = Math.max(100, viewportWrapper.clientWidth - pad);
+        const viewH = Math.max(100, viewportWrapper.clientHeight - pad);
+
+        // Compute aspect-ratio scale factor
+        const scale = Math.min(viewW / naturalW, viewH / naturalH);
+        const baseW = Math.round(naturalW * scale);
+        const baseH = Math.round(naturalH * scale);
+
+        const displayW = Math.max(50, Math.round(baseW * currentZoom));
+        const displayH = Math.max(50, Math.round(baseH * currentZoom));
+
+        // Lock container exact rendered dimensions
+        canvasContainer.style.width = `${displayW}px`;
+        canvasContainer.style.height = `${displayH}px`;
+
+        // Canvas internal resolution always locked 1:1 to natural image pixels
+        if (overlayCanvas.width !== naturalW || overlayCanvas.height !== naturalH) {
+            overlayCanvas.width = naturalW;
+            overlayCanvas.height = naturalH;
+        }
+
         drawBoxes();
     }
+
+    function setupCanvas() {
+        currentZoom = 1.0;
+        updateCanvasLayout();
+    }
+
+    // Auto-recalculate on window resize or panel layout shift
+    window.addEventListener('resize', updateCanvasLayout);
+    if (window.ResizeObserver) {
+        const resizeObserver = new ResizeObserver(() => {
+            updateCanvasLayout();
+        });
+        resizeObserver.observe(viewportWrapper);
+    }
+
+    // --- Zoom Controls ---
+    if (zoomInBtn) {
+        zoomInBtn.addEventListener('click', () => {
+            currentZoom = Math.min(MAX_ZOOM, Math.round((currentZoom + 0.25) * 100) / 100);
+            updateCanvasLayout();
+        });
+    }
+
+    if (zoomOutBtn) {
+        zoomOutBtn.addEventListener('click', () => {
+            currentZoom = Math.max(MIN_ZOOM, Math.round((currentZoom - 0.25) * 100) / 100);
+            updateCanvasLayout();
+        });
+    }
+
+    if (resetZoomBtn) {
+        resetZoomBtn.addEventListener('click', () => {
+            currentZoom = 1.0;
+            updateCanvasLayout();
+        });
+    }
+
+    // Mouse wheel zoom with Ctrl
+    viewportWrapper.addEventListener('wheel', (e) => {
+        if (e.ctrlKey) {
+            e.preventDefault();
+            const delta = e.deltaY < 0 ? 0.15 : -0.15;
+            currentZoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, Math.round((currentZoom + delta) * 100) / 100));
+            updateCanvasLayout();
+        }
+    }, { passive: false });
 
     function drawBoxes() {
         const ctx = overlayCanvas.getContext('2d');
@@ -189,20 +268,20 @@ document.addEventListener('DOMContentLoaded', () => {
 
             // Confidence based coloring
             let strokeColor = '#06b6d4'; // Cyan
-            let fillColor = 'rgba(6, 182, 212, 0.15)';
+            let fillColor = 'rgba(6, 182, 212, 0.18)';
             if (item.confidence >= 0.90) {
                 strokeColor = '#10b981'; // Emerald
-                fillColor = isHovered ? 'rgba(16, 185, 129, 0.35)' : 'rgba(16, 185, 129, 0.15)';
+                fillColor = isHovered ? 'rgba(16, 185, 129, 0.4)' : 'rgba(16, 185, 129, 0.18)';
             } else if (item.confidence < 0.75) {
                 strokeColor = '#f43f5e'; // Rose
-                fillColor = isHovered ? 'rgba(244, 63, 94, 0.35)' : 'rgba(244, 63, 94, 0.15)';
+                fillColor = isHovered ? 'rgba(244, 63, 94, 0.4)' : 'rgba(244, 63, 94, 0.18)';
             }
 
             if (isHovered) {
                 strokeColor = '#ffffff';
-                ctx.lineWidth = 3;
+                ctx.lineWidth = Math.max(3, Math.round(overlayCanvas.width / 400));
             } else {
-                ctx.lineWidth = 2;
+                ctx.lineWidth = Math.max(2, Math.round(overlayCanvas.width / 600));
             }
 
             ctx.strokeStyle = strokeColor;
@@ -229,7 +308,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- Canvas Mouse Hover / Tooltip ---
     overlayCanvas.addEventListener('mousemove', (e) => {
         const boxes = getActiveBoxes();
-        if (!boxes) return;
+        if (!boxes || boxes.length === 0) return;
 
         const rect = overlayCanvas.getBoundingClientRect();
         const scaleX = overlayCanvas.width / rect.width;
@@ -252,10 +331,17 @@ document.addEventListener('DOMContentLoaded', () => {
             hoveredBoxIndex = foundIdx;
             const item = boxes[foundIdx];
             
-            // Show Tooltip
             boxTooltip.style.display = 'block';
-            boxTooltip.style.left = `${e.clientX - viewportWrapper.getBoundingClientRect().left + 15}px`;
-            boxTooltip.style.top = `${e.clientY - viewportWrapper.getBoundingClientRect().top + 15}px`;
+            const vRect = viewportWrapper.getBoundingClientRect();
+            let left = e.clientX - vRect.left + 15;
+            let top = e.clientY - vRect.top + 15;
+
+            // Prevent tooltip overflowing viewport bounds
+            if (left + 260 > vRect.width) left = Math.max(10, left - 280);
+            if (top + 100 > vRect.height) top = Math.max(10, top - 110);
+
+            boxTooltip.style.left = `${left}px`;
+            boxTooltip.style.top = `${top}px`;
             document.getElementById('tt-conf').textContent = `${(item.confidence * 100).toFixed(1)}% Conf`;
             document.getElementById('tt-angle').textContent = `${item.angle || 0}° Angle`;
             document.getElementById('tt-text').textContent = item.text;
@@ -367,7 +453,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // Visualizer / Document Breakdown
         if (data.file_type === 'image' && canvasContainer.style.display !== 'none') {
-            setupCanvas();
+            updateCanvasLayout();
         } else if (data.pages && data.pages.length > 0) {
             docPagesList.innerHTML = '';
             data.pages.forEach(page => {
